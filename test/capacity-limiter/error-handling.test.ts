@@ -56,7 +56,7 @@ describe('CapacityLimiter: Error Handling', () => {
 
         // Now try a task with too much capacity
         expect(() => limiterWithStrictCapacity.schedule(11, () => Promise.resolve())).toThrow(
-            new CapacityLimiterError('max-capacity-exceeded', 'Task capacity (11) exceeds max capacity (10).')
+            new CapacityLimiterError('max-capacity-exceeded', 'Task capacity (11) exceeds maxCapacity (10).')
         );
     });
 

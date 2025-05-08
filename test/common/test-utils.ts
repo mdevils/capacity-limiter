@@ -163,7 +163,12 @@ export function createFailingTask(
 export function fillLimiterToCapacity(limiter: CapacityLimiter, capacity?: number) {
     const fillTaskMock = createControlledTask();
     const maxCapacity = limiter.getOptions().maxCapacity;
-    const fillPromise = limiter.schedule(capacity ?? maxCapacity, fillTaskMock.task);
+
+    if (maxCapacity === undefined && capacity === undefined) {
+        throw new Error('Cannot fill limiter to capacity when maxCapacity is not specified');
+    }
+
+    const fillPromise = limiter.schedule(capacity ?? maxCapacity!, fillTaskMock.task);
 
     return {
         task: fillTaskMock.task,

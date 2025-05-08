@@ -298,7 +298,7 @@ describe('CapacityLimiter: Edge Cases', () => {
         // But a task with any capacity should fail
         const normalTask = jest.fn().mockResolvedValue('normal task');
         expect(() => limiter.schedule(1, normalTask)).toThrow(
-            new CapacityLimiterError('max-capacity-exceeded', 'Task capacity (1) exceeds max capacity (0).')
+            new CapacityLimiterError('max-capacity-exceeded', 'Task capacity (1) exceeds maxCapacity (0).')
         );
 
         limiter.setOptions({...limiter.getOptions(), taskExceedsMaxCapacityStrategy: 'wait-for-full-capacity'});

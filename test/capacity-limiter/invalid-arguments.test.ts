@@ -17,7 +17,7 @@ describe('CapacityLimiter: Invalid Arguments', () => {
             expect(() => new CapacityLimiter({maxCapacity: -1})).toThrow(
                 new CapacityLimiterError(
                     'invalid-argument',
-                    'Invalid argument. Expected a non-negative number as the max capacity.'
+                    'Invalid argument. Expected a non-negative number as the maxCapacity.'
                 )
             );
         });
@@ -140,7 +140,7 @@ describe('CapacityLimiter: Invalid Arguments', () => {
         it('should throw error when task capacity exceeds max capacity with throw-error strategy', async () => {
             // Now try to schedule a task that exceeds remaining capacity
             expect(() => limiter.schedule(11, () => Promise.resolve())).toThrow(
-                new CapacityLimiterError('max-capacity-exceeded', 'Task capacity (11) exceeds max capacity (10).')
+                new CapacityLimiterError('max-capacity-exceeded', 'Task capacity (11) exceeds maxCapacity (10).')
             );
         });
 

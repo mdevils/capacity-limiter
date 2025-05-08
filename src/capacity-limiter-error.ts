@@ -1,5 +1,6 @@
 type CapacityLimiterErrorType =
     | 'invalid-argument'
+    | 'invalid-call'
     | 'max-capacity-exceeded'
     | 'queue-size-exceeded'
     | 'queue-timeout'

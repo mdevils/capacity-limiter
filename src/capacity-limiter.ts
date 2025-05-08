@@ -16,8 +16,9 @@ export interface CapacityLimiterOptions {
      * The maximum capacity for the limiter.
      * This can be memory, CPU, or any other resource that you want to limit.
      * Should be a non-negative number (greater than or equal to 0).
+     * If not specified, capacity will not be limited.
      */
-    maxCapacity: number;
+    maxCapacity?: number;
     /**
      * The current capacity of the limiter.
      * This can be used to specify capacity that is already in use.
@@ -267,7 +268,7 @@ const defaultOptions = {
     capacityStrategy: 'reserve',
     taskExceedsMaxCapacityStrategy: 'throw-error',
     queueSizeExceededStrategy: 'throw-error'
-} satisfies Omit<CapacityLimiterOptions, 'maxCapacity'>;
+} satisfies CapacityLimiterOptions;
 
 /**
  * Capacity Limiter is a task scheduler that limits the number of concurrent tasks based on a specified capacity.
@@ -325,41 +326,17 @@ export class CapacityLimiter {
             },
             canReduceCapacity: () => this.usedCapacity > 0
         });
+        this.checkMaxCapacity(options.maxCapacity);
+        this.checkUsedCapacity(options.initiallyUsedCapacity, options.maxCapacity);
+        this.checkCapacityStrategy(options.capacityStrategy, options.maxCapacity);
+        this.checkReleaseRules(options.releaseRules, options.maxCapacity);
         this.originalOptions = options;
         this.options = {
             ...defaultOptions,
             ...options
         };
-        this.checkMaxCapacity(options.maxCapacity);
-        if (options.initiallyUsedCapacity) {
-            this.checkUsedCapacity(options.initiallyUsedCapacity);
-        }
         this.usedCapacity = this.options.initiallyUsedCapacity ?? 0;
         this.releaseRuleManager.setRules(this.options.releaseRules ?? []);
-    }
-
-    protected checkMaxCapacity(maxCapacity: number) {
-        if (maxCapacity < 0) {
-            throw new CapacityLimiterError(
-                'invalid-argument',
-                'Invalid argument. Expected a non-negative number as the max capacity.'
-            );
-        }
-    }
-
-    protected checkUsedCapacity(usedCapacity: number) {
-        if (usedCapacity < 0) {
-            throw new CapacityLimiterError(
-                'invalid-argument',
-                'Invalid argument. Expected a non-negative number as the used capacity.'
-            );
-        }
-        if (usedCapacity > this.options.maxCapacity) {
-            throw new CapacityLimiterError(
-                'invalid-argument',
-                `Invalid argument. Expected a number less than or equal to ${this.options.maxCapacity} as the used capacity.`
-            );
-        }
     }
 
     /**
@@ -377,13 +354,83 @@ export class CapacityLimiter {
      */
     public setOptions(options: CapacityLimiterOptions) {
         this.checkMaxCapacity(options.maxCapacity);
+        this.checkCapacityStrategy(options.capacityStrategy, options.maxCapacity);
+        this.checkReleaseRules(options.releaseRules, options.maxCapacity);
         this.options = {
             ...defaultOptions,
             ...options
         };
         this.originalOptions = options;
-        this.usedCapacity = this.options.initiallyUsedCapacity ?? this.usedCapacity;
         this.releaseRuleManager.setRules(this.options.releaseRules ?? []);
+    }
+
+    /**
+     * Checks if the max capacity is valid.
+     */
+    protected checkMaxCapacity(maxCapacity?: number) {
+        if (maxCapacity === undefined) {
+            return;
+        }
+        if (maxCapacity < 0) {
+            throw new CapacityLimiterError(
+                'invalid-argument',
+                'Invalid argument. Expected a non-negative number as the maxCapacity.'
+            );
+        }
+    }
+
+    /**
+     * Checks if the used capacity is valid.
+     */
+    protected checkUsedCapacity(usedCapacity?: number, maxCapacity?: number) {
+        if (usedCapacity === undefined) {
+            return;
+        }
+        if (maxCapacity === undefined) {
+            throw new CapacityLimiterError(
+                'invalid-call',
+                'Cannot set used capacity when maxCapacity is not specified.'
+            );
+        }
+        if (usedCapacity < 0) {
+            throw new CapacityLimiterError(
+                'invalid-argument',
+                'Invalid argument. Expected a non-negative number as the used capacity.'
+            );
+        }
+        if (usedCapacity > maxCapacity) {
+            throw new CapacityLimiterError(
+                'invalid-argument',
+                `Invalid argument. Expected a number less than or equal to ${maxCapacity} as the used capacity.`
+            );
+        }
+    }
+
+    /**
+     * Checks if the capacity strategy is valid.
+     */
+    protected checkCapacityStrategy(
+        capacityStrategy: CapacityLimiterOptions['capacityStrategy'],
+        maxCapacity?: number
+    ) {
+        if (capacityStrategy && maxCapacity === undefined) {
+            throw new CapacityLimiterError(
+                'invalid-argument',
+                'Invalid argument. Cannot use capacityStrategy when maxCapacity is not specified.'
+            );
+        }
+    }
+
+    /**
+     * Checks if the release rules are valid.
+     */
+    protected checkReleaseRules(releaseRules: CapacityLimiterOptions['releaseRules'], maxCapacity?: number) {
+        if (releaseRules && releaseRules.length > 0 && maxCapacity === undefined) {
+            throw new CapacityLimiterError(
+                'invalid-argument',
+                'Invalid argument. Cannot use releaseRules when maxCapacity is not specified.'
+            );
+        }
     }
 
     /**
@@ -403,7 +450,7 @@ export class CapacityLimiter {
      * - `invalid-argument` - Invalid argument when calling the method.
      */
     public setUsedCapacity(usedCapacity: number) {
-        this.checkUsedCapacity(usedCapacity);
+        this.checkUsedCapacity(usedCapacity, this.options.maxCapacity);
         this.usedCapacity = usedCapacity;
         this.startNextTaskIfPossible();
         return Promise.resolve();
@@ -413,7 +460,10 @@ export class CapacityLimiter {
      * Adds a value to the used capacity of the Capacity Limiter.
      * In case of a negative value, it will be subtracted from the used capacity.
      */
-    public modifyUsedCapacity(diff: number) {
+    public adjustUsedCapacity(diff: number) {
+        if (this.options.maxCapacity === undefined) {
+            throw new CapacityLimiterError('invalid-call', 'Cannot adjust capacity when maxCapacity is not specified.');
+        }
         this.usedCapacity = Math.min(Math.max(0, this.usedCapacity + diff), this.options.maxCapacity);
         this.startNextTaskIfPossible();
         return Promise.resolve();
@@ -423,6 +473,10 @@ export class CapacityLimiter {
      * Checks if the task can fit in the current capacity.
      */
     protected canFitTask(task: Task): boolean {
+        // If maxCapacity is not specified, any task can fit
+        if (this.options.maxCapacity === undefined) {
+            return true;
+        }
         return this.usedCapacity + task.capacity <= this.options.maxCapacity;
     }
 
@@ -461,9 +515,13 @@ export class CapacityLimiter {
             return;
         }
 
-        if (this.options.capacityStrategy === 'reserve') {
-            // Explicitly specify that the task is reserving the capacity.
-            taskToExecute.reservedCapacity = taskToExecute.capacity;
+        // Only reserve capacity if maxCapacity is specified
+        if (this.options.maxCapacity !== undefined) {
+            if (this.options.capacityStrategy === 'reserve') {
+                // Explicitly specify that the task is reserving the capacity.
+                taskToExecute.reservedCapacity = taskToExecute.capacity;
+            }
+            this.usedCapacity += taskToExecute.capacity;
         }
 
         // If timer had a queue waiting timeout, it will be cleared.
@@ -474,7 +532,6 @@ export class CapacityLimiter {
 
         // Explicitly specify that the task is reserving the concurrent tasks.
         taskToExecute.reservedConcurrent = 1;
-        this.usedCapacity += taskToExecute.capacity;
         this.usedConcurrent += 1;
         this.queue.delete(taskToExecute);
         this.tasksByTimeAdded.delete(taskToExecute);
@@ -594,7 +651,7 @@ export class CapacityLimiter {
             this.usedConcurrent = Math.max(0, this.usedConcurrent - task.reservedConcurrent);
             task.reservedConcurrent = 0;
         }
-        if (task.reservedCapacity) {
+        if (task.reservedCapacity && this.options.maxCapacity !== undefined) {
             this.usedCapacity = Math.max(0, this.usedCapacity - task.reservedCapacity);
             task.reservedCapacity = 0;
         }
@@ -614,11 +671,11 @@ export class CapacityLimiter {
             return;
         }
 
-        if (task.capacity > this.options.maxCapacity) {
+        if (this.options.maxCapacity !== undefined && task.capacity > this.options.maxCapacity) {
             if (this.options.taskExceedsMaxCapacityStrategy === 'throw-error') {
                 throw new CapacityLimiterError(
                     'max-capacity-exceeded',
-                    `Task capacity (${task.capacity}) exceeds max capacity (${this.options.maxCapacity}).`
+                    `Task capacity (${task.capacity}) exceeds maxCapacity (${this.options.maxCapacity}).`
                 );
             } else {
                 task.capacity = this.options.maxCapacity;
