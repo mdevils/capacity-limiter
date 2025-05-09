@@ -1,8 +1,8 @@
 # Capacity Limiter
 
-![npm version](https://img.shields.io/npm/v/capacity-limiter)
-![license](https://img.shields.io/npm/l/capacity-limiter)
-![build status](https://img.shields.io/github/actions/workflow/status/mdevils/capacity-limiter/build.yml?branch=main)
+[![npm version](https://img.shields.io/npm/v/capacity-limiter)](https://npmjs.com/package/capacity-limiter)
+[![license](https://img.shields.io/npm/l/capacity-limiter)](./LICENSE)
+[![build status](https://img.shields.io/github/actions/workflow/status/mdevils/capacity-limiter/build.yml?branch=main)](https://github.com/mdevils/capacity-limiter/actions)
 
 A powerful, flexible task scheduler and rate limiter based on resource capacity.
 Efficiently manage task execution in JavaScript and TypeScript applications.
