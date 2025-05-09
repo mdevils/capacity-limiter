@@ -422,15 +422,14 @@ async function processItems(items) {
 ```typescript
 // Limit memory usage for processing large files
 const memoryLimiter = new CapacityLimiter({
-  maxCapacity: 500,             // Limit to 500MB of memory usage
+  maxCapacity: 500 * 1024 * 1024, // Limit to 500MB of memory usage
 });
 
 // Process files with file size determining capacity requirements
 async function processFile(filePath) {
   const stats = await fs.promises.stat(filePath);
-  const fileSizeMB = stats.size / (1024 * 1024);
-  
-  return memoryLimiter.schedule(fileSizeMB, async () => {
+ 
+  return memoryLimiter.schedule(stats.size, async () => {
     // Read and process file
     const data = await fs.promises.readFile(filePath);
     return processData(data);
