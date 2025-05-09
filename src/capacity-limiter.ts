@@ -84,6 +84,12 @@ export interface CapacityLimiterOptions {
      */
     queueWaitingTimeout?: number;
     /**
+     * The time to wait between tasks execution.
+     * Default is no delay.
+     * Time in milliseconds.
+     */
+    minDelayBetweenTasks?: number;
+    /**
      * Fails tasks that are not executed within the specified time.
      * This means that the Promise of the task will be rejected and the capacity will be released.
      * Time in milliseconds.
@@ -114,6 +120,7 @@ export interface TaskParams<TResult = unknown> {
     /**
      * The priority of the task. 0 is the highest priority and 9 is the lowest.
      * Accepts values from 0 to 9.
+     * Default is 5.
      */
     priority?: number;
     /**
@@ -304,6 +311,10 @@ export class CapacityLimiter {
         /** The resolve method of the promise that was returned by the `stop()` method. */
         stoppedResolve?: () => void;
     };
+    /** The timer for the delay between tasks. */
+    protected delayBetweenTasksTimerId?: ReturnType<typeof setTimeout>;
+    /** The moment when the last task was executed. */
+    protected lastTaskExecutionTime?: number;
 
     /**
      * Creates a new Capacity Limiter instance.
@@ -326,10 +337,7 @@ export class CapacityLimiter {
             },
             canReduceCapacity: () => this.usedCapacity > 0
         });
-        this.checkMaxCapacity(options.maxCapacity);
-        this.checkUsedCapacity(options.initiallyUsedCapacity, options.maxCapacity);
-        this.checkCapacityStrategy(options.capacityStrategy, options.maxCapacity);
-        this.checkReleaseRules(options.releaseRules, options.maxCapacity);
+        this.checkOptions(options);
         this.originalOptions = options;
         this.options = {
             ...defaultOptions,
@@ -353,9 +361,10 @@ export class CapacityLimiter {
      * - `invalid-argument` - Invalid argument when calling the method.
      */
     public setOptions(options: CapacityLimiterOptions) {
-        this.checkMaxCapacity(options.maxCapacity);
-        this.checkCapacityStrategy(options.capacityStrategy, options.maxCapacity);
-        this.checkReleaseRules(options.releaseRules, options.maxCapacity);
+        this.checkOptions(options);
+        if (this.options.maxCapacity !== options.maxCapacity && options.maxCapacity !== undefined) {
+            this.usedCapacity = Math.min(this.usedCapacity, options.maxCapacity);
+        }
         this.options = {
             ...defaultOptions,
             ...options
@@ -365,18 +374,26 @@ export class CapacityLimiter {
     }
 
     /**
-     * Checks if the max capacity is valid.
+     * Checks the options passed to the constructor or `setOptions()`.
      */
-    protected checkMaxCapacity(maxCapacity?: number) {
-        if (maxCapacity === undefined) {
-            return;
-        }
-        if (maxCapacity < 0) {
+    protected checkOptions(options: CapacityLimiterOptions) {
+        this.checkNonNegative(options, 'maxCapacity');
+        this.checkNonNegative(options, 'maxConcurrent');
+        this.checkNonNegative(options, 'initiallyUsedCapacity');
+        this.checkNonNegative(options, 'executionTimeout');
+        this.checkNonNegative(options, 'maxQueueSize');
+        if (options.maxQueueSize === 0) {
             throw new CapacityLimiterError(
                 'invalid-argument',
-                'Invalid argument. Expected a non-negative number as the maxCapacity.'
+                'Invalid argument. Expected a positive number as the maxQueueSize.'
             );
         }
+        this.checkNonNegative(options, 'queueWaitingLimit');
+        this.checkNonNegative(options, 'queueWaitingTimeout');
+        this.checkNonNegative(options, 'minDelayBetweenTasks');
+        this.checkUsedCapacity(options.initiallyUsedCapacity, options.maxCapacity);
+        this.checkCapacityStrategy(options.capacityStrategy, options.maxCapacity);
+        this.checkReleaseRules(options.releaseRules, options.maxCapacity);
     }
 
     /**
@@ -426,9 +443,28 @@ export class CapacityLimiter {
      */
     protected checkReleaseRules(releaseRules: CapacityLimiterOptions['releaseRules'], maxCapacity?: number) {
         if (releaseRules && releaseRules.length > 0 && maxCapacity === undefined) {
+            for (const rule of releaseRules) {
+                this.checkNonNegative(rule, 'interval', 'release rule');
+                this.checkNonNegative(rule, 'value', 'release rule');
+            }
             throw new CapacityLimiterError(
                 'invalid-argument',
                 'Invalid argument. Cannot use releaseRules when maxCapacity is not specified.'
+            );
+        }
+    }
+
+    /**
+     * Checks if the value is a non-negative number.
+     */
+    protected checkNonNegative<T extends {}>(object: T, name: keyof T, moreInfo?: string) {
+        if (object[name] === undefined) {
+            return;
+        }
+        if (object[name] < 0) {
+            throw new CapacityLimiterError(
+                'invalid-argument',
+                `Invalid argument. Expected a non-negative number as the ${moreInfo ? moreInfo + ' ' : ''}${String(name)}.`
             );
         }
     }
@@ -448,6 +484,7 @@ export class CapacityLimiter {
      *
      * @throws {CapacityLimiterError} with types:
      * - `invalid-argument` - Invalid argument when calling the method.
+     * - `invalid-call` - Invalid call if `maxCapacity` is not specified.
      */
     public setUsedCapacity(usedCapacity: number) {
         this.checkUsedCapacity(usedCapacity, this.options.maxCapacity);
@@ -459,6 +496,9 @@ export class CapacityLimiter {
     /**
      * Adds a value to the used capacity of the Capacity Limiter.
      * In case of a negative value, it will be subtracted from the used capacity.
+     *
+     * @throws {CapacityLimiterError} with types:
+     * - `invalid-call` - Invalid call if `maxCapacity` is not specified.
      */
     public adjustUsedCapacity(diff: number) {
         if (this.options.maxCapacity === undefined) {
@@ -489,15 +529,34 @@ export class CapacityLimiter {
             return;
         }
 
+        const now = Date.now();
         if (this.options.maxConcurrent && this.usedConcurrent >= this.options.maxConcurrent) {
             return;
+        }
+
+        if (this.options.minDelayBetweenTasks !== undefined && this.options.minDelayBetweenTasks > 0) {
+            if (
+                this.lastTaskExecutionTime !== undefined &&
+                now - this.lastTaskExecutionTime < this.options.minDelayBetweenTasks
+            ) {
+                if (!this.delayBetweenTasksTimerId) {
+                    this.delayBetweenTasksTimerId = setTimeout(
+                        () => {
+                            this.delayBetweenTasksTimerId = undefined;
+                            this.startNextTaskIfPossible();
+                        },
+                        this.options.minDelayBetweenTasks - (now - this.lastTaskExecutionTime)
+                    );
+                }
+                return;
+            }
         }
 
         let taskToExecute: Task | undefined;
         // Important task is the task that have a time limit and are waiting for it to expire.
         const importantTask = this.tasksByTimeLimit.peekFirst();
         if (importantTask) {
-            if (importantTask.timeLimit! <= Date.now()) {
+            if (importantTask.timeLimit! <= now) {
                 if (this.canFitTask(importantTask)) {
                     taskToExecute = importantTask;
                 } else {
@@ -538,8 +597,13 @@ export class CapacityLimiter {
         if (taskToExecute.timeLimit) {
             this.tasksByTimeLimit.delete(taskToExecute);
         }
+        this.lastTaskExecutionTime = now;
         this.executeTask(taskToExecute);
 
+        if (this.delayBetweenTasksTimerId) {
+            clearTimeout(this.delayBetweenTasksTimerId);
+            this.delayBetweenTasksTimerId = undefined;
+        }
         if (this.queue.length === 0) {
             // If queue is empty, disable timers to save resources.
             // This also avoids keeping node.js running if there are no tasks to execute.
@@ -547,6 +611,12 @@ export class CapacityLimiter {
         } else {
             // If there are tasks in the queue, we need to check if we can execute the next task.
             this.startNextTaskIfPossible();
+            if (this.options.minDelayBetweenTasks !== undefined && this.options.minDelayBetweenTasks > 0) {
+                this.delayBetweenTasksTimerId = setTimeout(() => {
+                    this.delayBetweenTasksTimerId = undefined;
+                    this.startNextTaskIfPossible();
+                }, this.options.minDelayBetweenTasks);
+            }
         }
     }
 

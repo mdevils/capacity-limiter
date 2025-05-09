@@ -7,6 +7,15 @@
 A powerful, flexible task scheduler and rate limiter based on resource capacity.
 Efficiently manage task execution in JavaScript and TypeScript applications.
 
+## Use Cases
+
+- **API Rate Limiting**: Respect API quota limits by scheduling requests within capacity - [See examples](#api-rate-limiting)
+- **Resource Intensive Operations**: Manage memory or CPU usage for heavy computations - [See examples](#cpu-bound-task-management)
+- **Database Connection Pooling**: Control number of concurrent database operations
+- **Worker Queues**: Manage task throughput based on worker capacity
+- **Network Request Management**: Throttle network requests to avoid overload
+- **Batch Processing**: Control parallelism for optimal resource usage - [See example](#memory-constrained-processing)
+
 ## Features
 
 - **Capacity-Based Task Scheduling**: Control resource usage with user-defined capacity units
@@ -31,37 +40,34 @@ pnpm add capacity-limiter
 
 ## Quick Start
 
+Example: API Rate Limiter
+
 ```typescript
 import { CapacityLimiter } from 'capacity-limiter';
 
-// Create a capacity limiter with a maximum capacity of 10 units
-const limiter = new CapacityLimiter({ maxCapacity: 10 });
+// Using claim strategy and reset rule to handle APIs with a quota that resets every minute
+const burstLimiter = new CapacityLimiter({
+    maxCapacity: 1000,             // API allows 1000 requests per minute
+    capacityStrategy: 'claim',     // Each request permanently claims capacity
+    releaseRules: [
+        { type: 'reset', interval: 60 * 1000 } // Reset capacity to 0 every minute
+    ]
+});
 
-// Schedule tasks with specific capacity requirements
-async function runTasks() {
-  // Run a small task (uses 2 capacity units out of 10)
-  await limiter.schedule(2, async () => {
-    console.log('Small task running');
-    await someAsyncOperation();
-  });
-
-  // Large task will be queued if not enough capacity is available (current capacity is 8)
-  const largeTaskPromise = limiter.schedule(9, async () => {
-    console.log('Large task running - may wait for capacity');
-    await largeAsyncOperation();
-  });
-
-  // Run a medium task (uses 5 capacity units)
-  await limiter.schedule(5, async () => {
-    console.log('Medium task running');
-    await someOtherAsyncOperation();
-  });
-  
-  await largeTaskPromise;
+// Make API requests through the limiter
+async function makeApiRequest(endpoint, data) {
+    return burstLimiter.schedule(1, async () => {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            body: JSON.stringify(data),
+            headers: { 'Content-Type': 'application/json' }
+        });
+        return response.json();
+    });
 }
-
-runTasks();
 ```
+
+More examples can be found in the [Real-World Examples](#real-world-examples) section.
 
 ## Core Concepts
 
@@ -69,6 +75,7 @@ runTasks();
 
 Capacity represents abstract resource units (CPU, memory, network, etc.) that tasks consume.
 You define what a unit means in your context - it could be memory in MB, API requests, database connections, etc.
+You can also use `maxConcurrent` and `minDelayBetweenTasks` as a replacement or addition to capacity-based management.
 
 ### Task Scheduling
 
@@ -218,7 +225,7 @@ constructor(options: CapacityLimiterOptions)
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `maxCapacity` | `number` | (required) | Maximum capacity that can be used |
+| `maxCapacity` | `number` | (optional) | Maximum capacity that can be used |
 | `initiallyUsedCapacity` | `number` | `0` | Initial capacity already in use |
 | `capacityStrategy` | `'reserve' \| 'claim'` | `'reserve'` | How capacity is managed |
 | `releaseRules` | `ReleaseRule[]` | `[]` | Rules for releasing capacity |
@@ -229,6 +236,7 @@ constructor(options: CapacityLimiterOptions)
 | `queueWaitingLimit` | `number` | (unlimited) | Max queue waiting time before prioritization |
 | `queueWaitingTimeout` | `number` | (unlimited) | Max queue waiting time before failure |
 | `executionTimeout` | `number` | (unlimited) | Max execution time |
+| `minDelayBetweenTasks` | `number` | (no delay) | Minimum time between task executions in milliseconds |
 | `failRecoveryStrategy` | `FailRecoveryStrategy` | `'none'` | Strategy for recovering from failures |
 
 ### Methods
@@ -261,21 +269,174 @@ getUsedCapacity(): Promise<number>;
 // Set used capacity
 setUsedCapacity(usedCapacity: number): Promise<void>;
 
-// Modify used capacity relatively
-modifyUsedCapacity(diff: number): Promise<void>;
+// Adjust used capacity relatively.
+// Positive values increase used capacity.
+// Negative values release capacity.
+adjustUsedCapacity(diff: number): Promise<void>;
 
 // Stop the limiter
 stop(params?: StopParams): Promise<void>;
 ```
 
-## Use Cases
+## Real-World Examples
 
-- **API Rate Limiting**: Respect API quota limits by scheduling requests within capacity
-- **Resource Intensive Operations**: Manage memory or CPU usage for heavy computations
-- **Database Connection Pooling**: Control number of concurrent database operations
-- **Worker Queues**: Manage task throughput based on worker capacity
-- **Network Request Management**: Throttle network requests to avoid overload
-- **Batch Processing**: Control parallelism for optimal resource usage
+Jump to:
+- [Example 1: Allowing Request Bursts](#example-1-allowing-request-bursts-1000-requestsminute)
+- [Example 2: Limiting Request Bursts](#example-2-limiting-request-bursts)
+- [Example 3: Distributing Requests with Minimum Delay](#example-3-distributing-requests-with-minimum-delay)
+- [Example 4: Sequential Requests with No Overlap](#example-4-sequential-requests-with-no-overlap)
+- [CPU-Bound Task Management](#cpu-bound-task-management)
+- [Memory-Constrained Processing](#memory-constrained-processing)
+
+### API Rate Limiting
+
+![API Rate Limiting](docs/api-rate-limiting.png)
+
+The way you handle API rate limiting depends on the API's behavior and your requirements.
+
+1. If the API allows bursts of requests and resets the quota every minute,
+   you can use a `claim` strategy with a `reset` rule to handle it for maximum efficiency.
+2. If the API allows bursts, but you want to limit them to avoid overloading the server,
+   you can use a `claim` strategy with a `reduce` rule to spread requests evenly.
+3. If the API doesn't handle bursts well,
+   you can use a `minDelayBetweenTasks` to enforce a minimum delay between requests.
+4. If you want to ensure that requests are executed sequentially without overlap,
+   you can combine `minDelayBetweenTasks` with `maxConcurrent` set to 1.
+
+#### Example 1: Allowing Request Bursts (1000 requests/minute)
+
+```typescript
+import { CapacityLimiter } from 'capacity-limiter';
+
+// Using claim strategy and reset rule to handle APIs with a quota that resets every minute
+const burstLimiter = new CapacityLimiter({
+  maxCapacity: 1000,             // API allows 1000 requests per minute
+  capacityStrategy: 'claim',     // Each request permanently claims capacity
+  releaseRules: [
+    { type: 'reset', interval: 60 * 1000 } // Reset capacity to 0 every minute
+  ]
+});
+
+// Make API requests through the limiter
+async function makeApiRequest(endpoint, data) {
+  return burstLimiter.schedule(1, async () => {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return response.json();
+  });
+}
+```
+
+#### Example 2: Limiting Request Bursts
+
+```typescript
+import { CapacityLimiter } from 'capacity-limiter';
+
+// Rate limit: 1000 requests per minute
+const REQUESTS_PER_MINUTE = 1000;
+const RELEASE_INTERVAL_MS = 15 * 1000; // Release capacity every 15 seconds
+
+// Using claim strategy and reduce rule to limit bursts and spread requests
+const smoothLimiter = new CapacityLimiter({
+  maxCapacity: REQUESTS_PER_MINUTE,
+  capacityStrategy: 'claim',
+  releaseRules: [
+    // Release (REQUESTS_PER_MINUTE / (60 * 1000 / RELEASE_INTERVAL_MS)) capacity every interval
+    { 
+      type: 'reduce', 
+      value: REQUESTS_PER_MINUTE / (60 * 1000 / RELEASE_INTERVAL_MS),
+      interval: RELEASE_INTERVAL_MS 
+    }
+  ]
+});
+
+// This approach prevents bursts from using all capacity at once
+// and spreads requests more evenly throughout the minute
+```
+
+#### Example 3: Distributing Requests with Minimum Delay
+
+```typescript
+import { CapacityLimiter } from 'capacity-limiter';
+
+// Rate limit: 1000 requests per minute
+const REQUESTS_PER_MINUTE = 1000;
+const MIN_DELAY_MS = (60 * 1000) / REQUESTS_PER_MINUTE; // 60ms between requests
+
+// Using minDelayBetweenTasks to enforce a minimum time between requests
+const delayLimiter = new CapacityLimiter({
+  minDelayBetweenTasks: MIN_DELAY_MS
+});
+
+// This spreads out requests evenly, but allows multiple requests to 
+// execute concurrently if they take longer than minDelayBetweenTasks
+```
+
+#### Example 4: Sequential Requests with No Overlap
+
+```typescript
+import { CapacityLimiter } from 'capacity-limiter';
+
+// Rate limit: 1000 requests per minute
+const REQUESTS_PER_MINUTE = 1000;
+const MIN_DELAY_MS = (60 * 1000) / REQUESTS_PER_MINUTE; // 60ms between requests
+
+// Combining minDelayBetweenTasks with maxConcurrent to prevent overlapping requests
+const sequentialLimiter = new CapacityLimiter({
+  minDelayBetweenTasks: MIN_DELAY_MS,
+  maxConcurrent: 1              // Only one request can execute at a time
+});
+
+// This guarantees that requests never overlap and are spaced at least 
+// 60ms apart, regardless of how long each request takes to complete
+```
+
+### CPU-Bound Task Management
+
+```typescript
+import os from 'os';
+import { CapacityLimiter } from 'capacity-limiter';
+
+const cpuLimiter = new CapacityLimiter({
+  maxConcurrent: os.cpus().length, // Use available CPU cores
+});
+
+// Process items utilizing available CPU cores
+async function processItems(items) {
+  return Promise.all(
+    items.map(item => 
+      cpuLimiter.schedule(async () => {
+        // CPU-intensive work here
+        return heavyComputation(item);
+      })
+    )
+  );
+}
+```
+
+### Memory-Constrained Processing
+
+```typescript
+// Limit memory usage for processing large files
+const memoryLimiter = new CapacityLimiter({
+  maxCapacity: 500,             // Limit to 500MB of memory usage
+});
+
+// Process files with file size determining capacity requirements
+async function processFile(filePath) {
+  const stats = await fs.promises.stat(filePath);
+  const fileSizeMB = stats.size / (1024 * 1024);
+  
+  return memoryLimiter.schedule(fileSizeMB, async () => {
+    // Read and process file
+    const data = await fs.promises.readFile(filePath);
+    return processData(data);
+  });
+}
+```
 
 ## Contributing
 
