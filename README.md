@@ -254,6 +254,64 @@ schedule<TResult>(capacity: number, callback: () => Promise<TResult>): Promise<T
 schedule<TResult>(params: TaskParams<TResult>): Promise<TResult>;
 ```
 
+#### `wrap`
+
+The `wrap()` method creates a wrapper function that automatically applies the capacity limiter to any function calls. This is particularly useful for creating rate-limited versions of existing functions.
+
+```typescript
+// Wrap a function with default capacity (1)
+wrap<T extends (...args: unknown[]) => Promise<unknown>>(callback: T): T;
+
+// Wrap a function with custom configuration
+wrap<T extends (...args: unknown[]) => Promise<unknown>>(params: WrappedTaskParams<T>): T;
+```
+
+**Examples:**
+
+```typescript
+// Basic function wrapping
+const originalApiCall = async (endpoint: string, data: any) => {
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    body: JSON.stringify(data),
+    headers: { 'Content-Type': 'application/json' }
+  });
+  return response.json();
+};
+
+// Create a rate-limited version
+const rateLimitedApiCall = limiter.wrap(originalApiCall);
+
+// Use exactly like the original function
+const result = await rateLimitedApiCall('/api/users', { name: 'John' });
+```
+
+```typescript
+// Wrapping with custom configuration
+const heavyTask = async (data: any) => {
+  // CPU-intensive work
+  return processData(data);
+};
+
+const wrappedHeavyTask = limiter.wrap({
+  task: heavyTask,
+  capacity: 5,           // Requires 5 capacity units
+  priority: 2,           // High priority
+  executionTimeout: 30000, // 30 second timeout
+  failRecoveryStrategy: 'retry' // Retry on failure
+});
+
+// The wrapped function maintains the same signature
+const result = await wrappedHeavyTask(myData);
+```
+
+The wrapped function:
+- Maintains the exact same function signature as the original
+- Preserves TypeScript types and parameter/return types
+- Automatically applies all capacity limiter features (queueing, priority, timeouts, retries, etc.)
+- Can be called multiple times with different arguments
+- Handles capacity management transparently
+
 #### Other Methods
 
 ```typescript
@@ -287,6 +345,7 @@ Jump to:
 - [Example 4: Sequential Requests with No Overlap](#example-4-sequential-requests-with-no-overlap)
 - [CPU-Bound Task Management](#cpu-bound-task-management)
 - [Memory-Constrained Processing](#memory-constrained-processing)
+- [Function Wrapping for Rate Limiting](#function-wrapping-for-rate-limiting)
 
 ### API Rate Limiting
 
@@ -435,6 +494,54 @@ async function processFile(filePath) {
     return processData(data);
   });
 }
+```
+
+### Function Wrapping for Rate Limiting
+
+```typescript
+import { CapacityLimiter } from 'capacity-limiter';
+
+// Create a limiter for API calls
+const apiLimiter = new CapacityLimiter({
+  maxCapacity: 100,             // 100 requests capacity
+  capacityStrategy: 'claim',    // Each request claims capacity
+  releaseRules: [
+    { type: 'reset', interval: 60 * 1000 } // Reset every minute
+  ]
+});
+
+// Original functions that need rate limiting
+const fetchUserData = async (userId: string) => {
+  const response = await fetch(`/api/users/${userId}`);
+  return response.json();
+};
+
+const updateUserProfile = async (userId: string, data: any) => {
+  const response = await fetch(`/api/users/${userId}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+    headers: { 'Content-Type': 'application/json' }
+  });
+  return response.json();
+};
+
+// Create rate-limited versions using wrap()
+const rateLimitedFetchUser = apiLimiter.wrap({
+  task: fetchUserData,
+  capacity: 1,
+  priority: 3
+});
+
+const rateLimitedUpdateUser = apiLimiter.wrap({
+  task: updateUserProfile,
+  capacity: 2,        // Updates use more capacity
+  priority: 1,        // Higher priority than fetches
+  failRecoveryStrategy: 'retry'
+});
+
+// Use the wrapped functions exactly like the originals
+const userData = await rateLimitedFetchUser('user123');
+const updateResult = await rateLimitedUpdateUser('user123', { name: 'John Doe' });
 ```
 
 ## Contributing

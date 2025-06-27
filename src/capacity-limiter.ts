@@ -104,13 +104,9 @@ export interface CapacityLimiterOptions {
 }
 
 /**
- * Common params for a task in the Capacity Limiter.
+ * Base params for a task in the Capacity Limiter.
  */
-export interface TaskParams<TResult = unknown> {
-    /**
-     * The task to be scheduled.
-     */
-    task(): Promise<TResult>;
+export interface BaseTaskParams {
     /**
      * How much capacity this task will consume.
      * This is used to determine if the task can be executed immediately or if it needs to wait in the queue.
@@ -148,6 +144,26 @@ export interface TaskParams<TResult = unknown> {
      * Fail recovery strategy for a task. Can be used to retry tasks that fail.
      */
     failRecoveryStrategy?: FailRecoveryStrategy;
+}
+
+/**
+ * Common params for a task in the Capacity Limiter.
+ */
+export interface TaskParams<TResult = unknown> extends BaseTaskParams {
+    /**
+     * The task to be scheduled.
+     */
+    task(): Promise<TResult>;
+}
+
+/**
+ * Params for a wrapped task.
+ */
+export interface WrappedTaskParams<T extends (...args: unknown[]) => Promise<unknown>> extends BaseTaskParams {
+    /**
+     * The task to be scheduled.
+     */
+    task: T;
 }
 
 /**
@@ -276,6 +292,8 @@ const defaultOptions = {
     taskExceedsMaxCapacityStrategy: 'throw-error',
     queueSizeExceededStrategy: 'throw-error'
 } satisfies CapacityLimiterOptions;
+
+type AnyCallback = (...args: any[]) => Promise<unknown>;
 
 /**
  * Capacity Limiter is a task scheduler that limits the number of concurrent tasks based on a specified capacity.
@@ -947,6 +965,22 @@ export class CapacityLimiter {
 
         this.scheduleTask(task);
         return promise;
+    }
+
+    /**
+     * Wraps a function applying the Capacity Limiter to it.
+     */
+    wrap<T extends AnyCallback>(params: WrappedTaskParams<T>): T;
+    wrap<T extends AnyCallback>(callback: T): T;
+    wrap<T extends AnyCallback>(callbackOrParams: T | WrappedTaskParams<T>): T {
+        const params = typeof callbackOrParams === 'function' ? {task: callbackOrParams} : callbackOrParams;
+        return ((...args: Parameters<T>) => {
+            const {task, ...otherParams} = params;
+            return this.schedule({
+                ...otherParams,
+                task: () => task(...args)
+            });
+        }) as T;
     }
 
     /**

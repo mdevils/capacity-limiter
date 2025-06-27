@@ -1,7 +1,7 @@
 // Logic of this calculation is based on: https://github.com/tim-kos/node-retry/blob/master/lib/retry.js
 
 export interface RetryOptions {
-    /** The maximum amount of times to retry the operation. Default is 10. Seting this to 1 means "do it once, then retry it once". */
+    /** The maximum amount of times to retry the operation. Default is 10. Setting this to 1 means "do it once, then retry it once". */
     retries?: number;
     /** The number of milliseconds before starting the first retry. Default is 1000. */
     minTimeout?: number;
