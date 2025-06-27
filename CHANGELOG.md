@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [1.1.0](https://github.com/mdevils/capacity-limiter/compare/v1.0.0...v1.1.0) (2025-06-27)
+
+
+### Features
+
+* add new wrap() method ([49b7a78](https://github.com/mdevils/capacity-limiter/commit/49b7a781074d8299de4c51ba6a005fe3fb1227de))
+
 ## [1.0.0](https://github.com/mdevils/capacity-limiter/compare/v0.1.1...v1.0.0) (2025-05-09)
 
 
